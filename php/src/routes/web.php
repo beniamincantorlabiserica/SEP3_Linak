@@ -33,6 +33,13 @@ Route::get('/api/desk-usage-stats', [DeskController::class, 'getUsageStats'])
     ->name('desk.usage-stats')
     ->middleware(['auth', 'web']);
 
+Route::middleware(['auth', 'web'])->group(function () {
+     Route::post('/desk-notifications/respond', [DeskController::class, 'handleNotification'])->name('desk.notification.respond');
+     Route::get('/desk-notifications/check', [DeskController::class, 'checkNotification'])->name('desk.notification.check');
+     Route::get('/desk-positions', [DeskController::class, 'getSavedPositions'])->name('desk.positions');
+ });
+ 
+
 // Authenticated routes
 Route::middleware('auth')->group(function () {
    Route::put('password', [PasswordController::class, 'update'])
@@ -43,7 +50,6 @@ Route::middleware('auth')->group(function () {
    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
-        
    // Dashboard
    Route::get('/dashboard', [DeskController::class, 'index'])
         ->name('dashboard');

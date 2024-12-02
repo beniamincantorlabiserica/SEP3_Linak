@@ -9,6 +9,49 @@
        <!-- Add this section to your dashboard.blade.php -->
 
        <div class="card bg-base-100 shadow-xl col-span-2">
+       <!-- Add to dashboard.blade.php -->
+<!-- Replace the existing notification modal in dashboard.blade.php -->
+<dialog id="notification-modal" class="modal">
+    <div class="modal-box max-w-2xl">
+        <div class="flex items-center gap-4 mb-6">
+            <div id="notification-icon" class="bg-primary/10 p-3 rounded-full">
+                <svg xmlns="http://www.w3.org/2000/svg" id="position-icon" class="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />
+                </svg>
+            </div>
+            <div>
+                <h3 class="font-bold text-lg" id="notification-title"></h3>
+                <p class="text-sm opacity-75" id="notification-description"></p>
+            </div>
+        </div>
+
+        <div id="positions-container" class="grid grid-cols-1 sm:grid-cols-2 gap-4 my-6">
+            <!-- Positions will be populated here -->
+        </div>
+
+        <div class="modal-action mt-6 border-t pt-4">
+            <button onclick="handleNotification(false)" class="btn btn-ghost">
+                Dismiss
+            </button>
+            <button onclick="handleNotification(true)" class="btn btn-primary" id="accept-btn">
+                Accept
+            </button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Test buttons for development -->
+<div class="flex gap-4 mt-4">
+    <button onclick="testPosition('sitting')" class="btn btn-primary">
+        Test Sitting Notification
+    </button>
+    <button onclick="testPosition('standing')" class="btn btn-primary">
+        Test Standing Notification
+    </button>
+</div>
+
+
+
     <div class="card-body">
         <h2 class="card-title">Desk Usage Statistics</h2>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4" id="usage-stats">
@@ -347,5 +390,144 @@ function initializeRatioChart() {
 
 // Update every minute
 setInterval(updateUsageStats, 60000);
+
+// ------------------------------------------------------------------------
+
+let currentNotification = null;
+let selectedPosition = null;
+
+function showNotification() {
+    const modal = document.getElementById('notification-modal');
+    const title = document.getElementById('notification-title');
+    const description = document.getElementById('notification-description');
+    const positionsContainer = document.getElementById('positions-container');
+    const acceptBtn = document.getElementById('accept-btn');
+    const positionIcon = document.getElementById('position-icon');
+
+    const positionType = currentNotification.type;
+    
+    // Update icon based on position type
+    positionIcon.innerHTML = positionType === 'standing' 
+        ? `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>` 
+        : `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>`;
+
+    title.textContent = `Time to ${positionType === 'standing' ? 'Stand Up' : 'Sit Down'}`;
+    description.textContent = `You've been ${positionType === 'standing' ? 'sitting' : 'standing'} for over an hour.`;
+
+    // Fetch and display all available positions
+    fetch('/desk-positions')
+        .then(response => response.json())
+        .then(positions => {
+            const filteredPositions = positions.filter(p => p.position_type === positionType);
+            
+            if (filteredPositions.length === 0) {
+                positionsContainer.innerHTML = `
+                    <div class="col-span-2 text-center py-4 bg-base-200 rounded-lg">
+                        <p class="text-sm opacity-75">No saved ${positionType} positions found.</p>
+                        <button onclick="document.getElementById('add-position-modal').showModal()" 
+                                class="btn btn-sm btn-ghost mt-2">
+                            Add New Position
+                        </button>
+                    </div>`;
+                document.getElementById('accept-btn').disabled = true;
+                return;
+            }
+
+            positionsContainer.innerHTML = filteredPositions.map(position => `
+                <button 
+                    onclick="selectPosition(${position.id}, ${position.position_mm})"
+                    class="btn btn-outline position-btn w-full justify-start font-normal normal-case"
+                    id="position-${position.id}"
+                >
+                    <div class="flex flex-col items-start">
+                        <span class="font-medium">${position.name}</span>
+                        <span class="text-sm opacity-75">Height: ${position.position_mm/10} cm</span>
+                    </div>
+                </button>
+            `).join('');
+
+            // Select first position by default
+            if (filteredPositions.length > 0) {
+                const firstPosition = filteredPositions[0];
+                selectPosition(firstPosition.id, firstPosition.position_mm);
+            }
+        });
+    modal.showModal();
+}
+
+function selectPosition(id, height) {
+    selectedPosition = { id, height };
+    
+    // Remove active class from all position buttons
+    document.querySelectorAll('.position-btn').forEach(btn => {
+        btn.classList.remove('btn-active', 'btn-primary');
+        btn.classList.add('btn-outline');
+    });
+    
+    // Add active class to selected button
+    const selectedBtn = document.getElementById(`position-${id}`);
+    if (selectedBtn) {
+        selectedBtn.classList.remove('btn-outline');
+        selectedBtn.classList.add('btn-active', 'btn-primary');
+    }
+    
+    document.getElementById('accept-btn').disabled = false;
+}
+
+async function handleNotification(accepted) {
+    try {
+        const response = await fetch('/desk-notifications/respond', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+            },
+            body: JSON.stringify({
+                notification_id: currentNotification.notification_id,
+                accepted,
+                height: accepted ? selectedPosition.height : null
+            })
+        });
+
+        const data = await response.json();
+
+        // Show toast notification
+        const toast = document.createElement('div');
+        toast.className = `alert ${accepted ? 'alert-success' : 'alert-info'} fixed bottom-4 right-4 w-auto max-w-sm shadow-lg`;
+        toast.innerHTML = `
+            <div class="flex items-center gap-2">
+                ${accepted ? 
+                    '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' : 
+                    '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'}
+                <span>${data.message}</span>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        
+        setTimeout(() => {
+            toast.remove();
+        }, 3000);
+        
+        document.getElementById('notification-modal').close();
+        currentNotification = null;
+        selectedPosition = null;
+    } catch (error) {
+        console.error('Error handling notification:', error);
+    }
+}
+
+// Test function
+async function testPosition(position) {
+    console.log('Simulating notification for:', position);
+    currentNotification = {
+        notification_id: 'test',
+        type: position === 'sitting' ? 'standing' : 'sitting'
+    };
+    showNotification();
+}
+
+// Check every minute
+checkNotification();
+setInterval(checkNotification, 60000);
 </script>
 </x-app-layout>

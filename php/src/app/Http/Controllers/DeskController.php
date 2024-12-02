@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use App\Models\DeskUsageLog;
+use App\Models\UserNotification;
 use Carbon\Carbon;
 
 class DeskController extends Controller
@@ -281,4 +282,91 @@ private function getPeriodStats($startDate, $endDate)
         
         return back()->with('success', 'Desk position updated');
     }
+
+    public function checkNotification()
+{
+    $user = auth()->user();
+    $lastLog = DeskUsageLog::where('user_id', $user->id)
+        ->whereNull('ended_at')
+        ->first();
+
+    if (!$lastLog) {
+        return response()->json(['shouldNotify' => false]);
+    }
+
+    $duration = now()->diffInMinutes($lastLog->started_at);
+    
+    if ($duration >= 60) {
+        $newPosition = $lastLog->position_type === 'sitting' ? 'standing' : 'sitting';
+        
+        // Get saved position if exists
+        $savedPosition = DeskPosition::where('user_id', $user->id)
+            ->where('position_type', $newPosition)
+            ->first();
+
+        // Create notification record
+        $notification = UserNotification::create([
+            'user_id' => $user->id,
+            'type' => 'position_change',
+            'message' => "Time to change to $newPosition position",
+            'position_type' => $newPosition,
+            'status' => 'pending'
+        ]);
+
+        return response()->json([
+            'shouldNotify' => true,
+            'notification_id' => $notification->id,
+            'type' => $newPosition,
+            'savedPosition' => $savedPosition
+        ]);
+    }
+
+    return response()->json(['shouldNotify' => false]);
+}
+
+public function handleNotification(Request $request)
+{
+    $user = auth()->user();
+    
+    if ($request->notification_id === 'test') {
+        $notification = UserNotification::create([
+            'user_id' => $user->id,
+            'type' => 'position_change',
+            'message' => 'Test position change',
+            'position_type' => $request->accepted ? 'standing' : 'sitting',
+            'status' => $request->accepted ? 'accepted' : 'declined',
+            'points' => $request->accepted ? 10 : 0
+        ]);
+    } else {
+        $notification = UserNotification::findOrFail($request->notification_id);
+        $notification->update([
+            'status' => $request->accepted ? 'accepted' : 'declined',
+            'points' => $request->accepted ? 10 : 0
+        ]);
+    }
+
+    if ($request->accepted && $request->height && $this->deskId) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, env('DESK_API_ENDPOINT') . "/E9Y2LxT4g1hQZ7aD8nR3mWx5P0qK6pV7/desks/{$this->deskId}/state");
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT");
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['position_mm' => intval($request->height) * 10]));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            $this->logPositionChange($request->height * 10);
+        }
+    }
+
+    return response()->json([
+        'success' => true,
+        'points' => $notification->points,
+        'message' => $request->accepted ? 
+            'Position change accepted! +10 points' : 
+            'Position change declined'
+    ]);
+}
 }
